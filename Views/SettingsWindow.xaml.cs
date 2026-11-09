@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Linq;
 using System.Windows.Media;
 using System.Windows.Threading;
 using InteractiveMenu.Models;
@@ -60,6 +61,7 @@ namespace InteractiveMenu.Views
             VersionText.Text = AppInfo.IsDevBuild ? "локальная сборка" : "v" + AppInfo.Version;
             Title = "InteractiveMenu — настройки";
 
+            Preview.NodeClicked += SelectInTree;
             BuildIconPanel();
             BuildSwatches();
             BuildStepTypes();
@@ -90,6 +92,11 @@ namespace InteractiveMenu.Views
 
             AutostartBox.IsChecked = AutostartService.IsEnabled();
             BlurBox.IsChecked = _cfg.BlurBackground;
+            CurvedBox.IsChecked = _cfg.CurvedBranches;
+            SoundBox.IsChecked = _cfg.ClickSound;
+            ThemeGlass.IsChecked = _cfg.Theme == BallTheme.Glass;
+            ThemeNeon.IsChecked = _cfg.Theme == BallTheme.Neon;
+            ThemeFlat.IsChecked = _cfg.Theme == BallTheme.Flat;
             AutoUpdateBox.IsChecked = _cfg.AutoUpdate;
             DimSlider.Value = _cfg.DimOpacity;
             ScaleSlider.Value = _cfg.BallScale;
@@ -128,6 +135,8 @@ namespace InteractiveMenu.Views
                 case nameof(MenuNode.ColorBrush):
                 case nameof(MenuNode.BallBrush):
                 case nameof(MenuNode.IsCategory):
+                case nameof(MenuNode.DropHint):
+                case nameof(MenuNode.HasApps):
                     return;
             }
             MarkDirty();
@@ -152,6 +161,7 @@ namespace InteractiveMenu.Views
 
         private void MarkDirty()
         {
+            Preview?.RequestRender();
             if (!_loadingUi) SetDirty(true);
         }
 
@@ -262,8 +272,20 @@ namespace InteractiveMenu.Views
 
             RbCategory.IsEnabled = !isRoot;
             RbButton.IsEnabled = !isRoot;
+            AppsPanel.Visibility = isRoot ? Visibility.Collapsed : Visibility.Visible;
 
             UpdateKindPanels();
+            Preview.Show(_cfg.Root, node, _cfg);
+        }
+
+        /// <summary>Выбрать шарик в дереве (раскрыв родителей) — например, по клику в превью.</summary>
+        private void SelectInTree(MenuNode node)
+        {
+            var chain = new System.Collections.Generic.List<MenuNode>();
+            for (var x = node; x != null; x = FindParent(_cfg.Root, x)) chain.Insert(0, x);
+            foreach (var n in chain.Take(chain.Count - 1)) n.IsExpanded = true;
+            node.IsSelected = true;
+            Select(node);
         }
 
         private void UpdateKindPanels()
@@ -506,6 +528,17 @@ namespace InteractiveMenu.Views
             if (_cfg == null || _loadingUi) return;
             _cfg.BlurBackground = BlurBox.IsChecked == true;
             _cfg.AutoUpdate = AutoUpdateBox.IsChecked == true;
+            _cfg.CurvedBranches = CurvedBox.IsChecked == true;
+            _cfg.ClickSound = SoundBox.IsChecked == true;
+            MarkDirty();
+        }
+
+        private void Theme_Checked(object sender, RoutedEventArgs e)
+        {
+            if (_cfg == null || _loadingUi) return;
+            _cfg.Theme = ThemeNeon.IsChecked == true ? BallTheme.Neon
+                : ThemeFlat.IsChecked == true ? BallTheme.Flat
+                : BallTheme.Glass;
             MarkDirty();
         }
 
@@ -547,6 +580,269 @@ namespace InteractiveMenu.Views
             SetDirty(true);
         }
 
+        // ================== выбор из списков ==================
+
+        private ContextMenu NewMenu(UIElement target)
+        {
+            var menu = new ContextMenu
+            {
+                PlacementTarget = target,
+                Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+                Style = (Style)FindResource(typeof(ContextMenu))
+            };
+            return menu;
+        }
+
+        private MenuItem NewItem(string header, Action onClick)
+        {
+            var item = new MenuItem { Header = header, Style = (Style)FindResource(typeof(MenuItem)) };
+            if (onClick != null) item.Click += (s, e) => onClick();
+            else item.IsEnabled = false;
+            return item;
+        }
+
+        private void PickApp_Click(object sender, RoutedEventArgs e)
+        {
+            if (_current == null) return;
+            var node = _current;
+            var menu = NewMenu((UIElement)sender);
+            var apps = ForegroundApp.ListWindowedApps();
+            if (apps.Count == 0) menu.Items.Add(NewItem("Не нашёл приложений с окнами", null));
+            foreach (var app in apps)
+            {
+                string title = app.Title.Length > 40 ? app.Title.Substring(0, 40) + "…" : app.Title;
+                menu.Items.Add(NewItem($"{app.Name}   ·   {title}", () =>
+                {
+                    var list = node.Apps.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                    if (!list.Contains(app.Name, StringComparer.OrdinalIgnoreCase)) list.Add(app.Name);
+                    node.Apps = string.Join(", ", list);
+                }));
+            }
+            menu.IsOpen = true;
+        }
+
+        private void PickDevice_Click(object sender, RoutedEventArgs e)
+        {
+            var step = StepOf(sender);
+            if (step == null) return;
+            var menu = NewMenu((UIElement)sender);
+            menu.Items.Add(NewItem("↻  По кругу (все устройства)", () => step.Argument = ""));
+            try
+            {
+                foreach (var d in AudioDevices.ListOutputs())
+                {
+                    string name = d.Name;
+                    menu.Items.Add(NewItem("🔈  " + name, () =>
+                    {
+                        // клик по второму устройству добавляет его в чередование: «Наушники | Динамики»
+                        var list = step.Argument.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                        if (list.Contains(name)) return;
+                        list.Add(name);
+                        step.Argument = string.Join(" | ", list);
+                    }));
+                }
+            }
+            catch (Exception ex)
+            {
+                menu.Items.Add(NewItem("Не удалось получить список: " + ex.Message, null));
+            }
+            menu.IsOpen = true;
+        }
+
+        // ================== экспорт / импорт ==================
+
+        private void Export_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "Меню InteractiveMenu|*.json",
+                FileName = "InteractiveMenu-menu.json"
+            };
+            if (dlg.ShowDialog(this) != true) return;
+            try
+            {
+                ConfigService.Export(_cfg, dlg.FileName);
+                DirtyText.Text = "Экспортировано ✓";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Не получилось экспортировать: " + ex.Message, "InteractiveMenu", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void Import_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "Меню InteractiveMenu|*.json|Все файлы|*.*" };
+            if (dlg.ShowDialog(this) != true) return;
+            try
+            {
+                var imported = ConfigService.Import(dlg.FileName);
+                // хоткей и автозапуск оставляем свои — импортируем меню и внешний вид
+                imported.HotkeyModifiers = _mods;
+                imported.HotkeyKey = _key;
+                imported.AutoUpdate = _cfg.AutoUpdate;
+                _cfg = imported;
+                var keepSnapshot = _snapshot;
+                LoadConfigIntoUi();
+                _snapshot = keepSnapshot;
+                SetDirty(true);
+                NavMenu.IsChecked = true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Не получилось импортировать: " + ex.Message, "InteractiveMenu", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        // ================== перетаскивание в дереве ==================
+
+        private Point _dragStart;
+        private MenuNode _dragNode;
+        private MenuNode _dropTarget;
+        private int _dropMode; // 1 — над, 2 — внутрь, 3 — под
+
+        private static T FindAncestor<T>(DependencyObject d) where T : DependencyObject
+        {
+            while (d != null && d is not T)
+                d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
+            return d as T;
+        }
+
+        private void Tree_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _dragStart = e.GetPosition(Tree);
+            var item = FindAncestor<TreeViewItem>(e.OriginalSource as DependencyObject);
+            _dragNode = item?.DataContext as MenuNode;
+            // корень не таскаем; клик по стрелке раскрытия — тоже не перетаскивание
+            if (_dragNode == _cfg.Root || FindAncestor<System.Windows.Controls.Primitives.ToggleButton>(e.OriginalSource as DependencyObject) != null)
+                _dragNode = null;
+        }
+
+        private void Tree_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (_dragNode == null || e.LeftButton != MouseButtonState.Pressed) return;
+            var pos = e.GetPosition(Tree);
+            if (Math.Abs(pos.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                Math.Abs(pos.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+                return;
+
+            var node = _dragNode;
+            _dragNode = null;
+            try
+            {
+                DragDrop.DoDragDrop(Tree, new DataObject(typeof(MenuNode), node), DragDropEffects.Move);
+            }
+            finally
+            {
+                ClearDropHint();
+            }
+        }
+
+        private void Tree_DragOver(object sender, DragEventArgs e)
+        {
+            e.Handled = true;
+            e.Effects = DragDropEffects.None;
+            if (!(e.Data.GetData(typeof(MenuNode)) is MenuNode dragged)) return;
+
+            var item = FindAncestor<TreeViewItem>(e.OriginalSource as DependencyObject);
+            var target = item?.DataContext as MenuNode;
+            if (target == null || target == dragged || IsDescendant(dragged, target))
+            {
+                ClearDropHint();
+                return;
+            }
+
+            // по высоте строки (только сам заголовок, без раскрытых детей)
+            var header = FindHeader(item);
+            double y = e.GetPosition(header).Y;
+            double h = Math.Max(1, header.ActualHeight);
+            int mode;
+            if (target == _cfg.Root) mode = 2;
+            else if (target.IsCategory) mode = y < h * 0.28 ? 1 : y > h * 0.72 ? 3 : 2;
+            else mode = y < h / 2 ? 1 : 3;
+
+            if (_dropTarget != target || _dropMode != mode)
+            {
+                ClearDropHint();
+                _dropTarget = target;
+                _dropMode = mode;
+                target.DropHint = mode;
+            }
+            e.Effects = DragDropEffects.Move;
+        }
+
+        private void Tree_DragLeave(object sender, DragEventArgs e)
+        {
+            // DragLeave приходит и при переходе между строками — сбросим, только если ушли из дерева
+            var pos = e.GetPosition(Tree);
+            if (pos.X < 0 || pos.Y < 0 || pos.X > Tree.ActualWidth || pos.Y > Tree.ActualHeight) ClearDropHint();
+        }
+
+        private void Tree_Drop(object sender, DragEventArgs e)
+        {
+            e.Handled = true;
+            var dragged = e.Data.GetData(typeof(MenuNode)) as MenuNode;
+            var target = _dropTarget;
+            int mode = _dropMode;
+            ClearDropHint();
+            if (dragged == null || target == null || target == dragged || IsDescendant(dragged, target)) return;
+
+            var oldParent = FindParent(_cfg.Root, dragged);
+            if (oldParent == null) return;
+
+            MenuNode newParent;
+            int index;
+            if (mode == 2)
+            {
+                newParent = target;
+                index = target.Children.Count;
+            }
+            else
+            {
+                newParent = FindParent(_cfg.Root, target);
+                if (newParent == null) return;
+                index = newParent.Children.IndexOf(target) + (mode == 3 ? 1 : 0);
+            }
+
+            if (oldParent == newParent)
+            {
+                int from = oldParent.Children.IndexOf(dragged);
+                if (from < index) index--;
+                if (from == index) return;
+                oldParent.Children.Move(from, Math.Clamp(index, 0, oldParent.Children.Count - 1));
+            }
+            else
+            {
+                oldParent.Children.Remove(dragged);
+                newParent.Children.Insert(Math.Clamp(index, 0, newParent.Children.Count), dragged);
+                newParent.IsExpanded = true;
+            }
+
+            dragged.IsSelected = true;
+            Select(dragged);
+        }
+
+        private static FrameworkElement FindHeader(TreeViewItem item)
+        {
+            // первый Border в шаблоне — строка заголовка
+            if (item.Template?.FindName("Bd", item) is FrameworkElement bd) return bd;
+            return item;
+        }
+
+        private static bool IsDescendant(MenuNode parent, MenuNode maybeChild)
+        {
+            foreach (var c in parent.Children)
+                if (c == maybeChild || IsDescendant(c, maybeChild)) return true;
+            return false;
+        }
+
+        private void ClearDropHint()
+        {
+            if (_dropTarget != null) _dropTarget.DropHint = 0;
+            _dropTarget = null;
+            _dropMode = 0;
+        }
+
         // ================== обновления ==================
 
         private void OnUpdaterStatus() => Dispatcher.BeginInvoke(new Action(RefreshUpdateUi));
@@ -585,6 +881,8 @@ namespace InteractiveMenu.Views
             _cfg.HotkeyKey = _key;
             _cfg.BlurBackground = BlurBox.IsChecked == true;
             _cfg.AutoUpdate = AutoUpdateBox.IsChecked == true;
+            _cfg.CurvedBranches = CurvedBox.IsChecked == true;
+            _cfg.ClickSound = SoundBox.IsChecked == true;
 
             try
             {

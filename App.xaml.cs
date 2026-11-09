@@ -69,11 +69,12 @@ namespace InteractiveMenu
             _hook = new KeyboardHook(Dispatcher) { IsMenuOpen = () => _menu.IsOpen };
             _hook.Pressed += OnHotkeyPressed;
             _hook.Released += () => _menu.OnHotkeyReleased();
-            _hook.EscapePressed += () => _menu.CloseMenu();
+            _hook.EscapePressed += () => _menu.OnEscape();
             ApplyHotkey();
 
             ActionRunner.OpenSettingsRequested = () => Dispatcher.BeginInvoke(new Action(ShowSettings));
             ActionRunner.Error += msg => ShowBalloon("Не получилось", msg, WF.ToolTipIcon.Warning);
+            ActionRunner.Notice += (title, text) => ShowBalloon(title, text, WF.ToolTipIcon.None);
 
             CreateTray();
 
@@ -124,10 +125,11 @@ namespace InteractiveMenu
 
         private void OnHotkeyPressed()
         {
-            // Фикс: отпускание Alt без других клавиш активирует меню-бар в активном окне,
-            // а отпускание Win — открывает «Пуск». «Пустой» нажим vkE8 ломает это (трюк из AutoHotkey).
-            if (Config.HotkeyModifiers.HasFlag(ModifierKeys.Alt) || Config.HotkeyModifiers.HasFlag(ModifierKeys.Windows))
-                NativeMethods.Tap(0xE8);
+            // «Пустой» нажим vkE8 (трюк из AutoHotkey):
+            //  • отпускание Alt/Win после него не открывает меню-бар окна и «Пуск»;
+            //  • Windows считает нас источником последнего ввода и разрешает забрать фокус —
+            //    тогда в открытом меню работает поиск с клавиатуры.
+            NativeMethods.Tap(0xE8);
 
             if (_menu.IsOpen) _menu.CloseMenu();
             else _menu.Open(Config.Root, Config);
@@ -135,6 +137,8 @@ namespace InteractiveMenu
 
         private async void OnActionChosen(MenuNode node)
         {
+            if (Config.ClickSound) SoundFx.PlayClick();
+
             await Task.Delay(40); // фокус возвращается в прошлое окно
 
             // ждём, пока отпустят модификаторы хоткея, чтобы они не «прилипли» к отправляемым комбинациям

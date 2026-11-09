@@ -30,6 +30,9 @@ namespace InteractiveMenu.Services
         public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
         [DllImport("user32.dll")]
+        public static extern bool SetCursorPos(int x, int y);
+
+        [DllImport("user32.dll")]
         public static extern short GetAsyncKeyState(int vKey);
 
         public static bool IsDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;

@@ -540,6 +540,20 @@
                         <Trigger Property="IsSelected" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentSoftBrush}" />
                         </Trigger>
+                        <!-- подсказки при перетаскивании -->
+                        <DataTrigger Binding="{Binding DropHint}" Value="1">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            <Setter TargetName="Bd" Property="BorderThickness" Value="0,3,0,0" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding DropHint}" Value="2">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            <Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding DropHint}" Value="3">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            <Setter TargetName="Bd" Property="BorderThickness" Value="0,0,0,3" />
+                        </DataTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -551,6 +565,48 @@
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+    </Style>
+
+
+    <!-- ===================== контекстное меню ===================== -->
+    <Style TargetType="ContextMenu">
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="MaxHeight" Value="420" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource BorderHoverBrush}"
+                            BorderThickness="1" CornerRadius="10" Padding="4">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
+                        </ScrollViewer>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="MenuItem">
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Padding="12,7">
+                        <ContentPresenter ContentSource="Header" RecognizesAccessKey="False" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{StaticResource TextFaintBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
 </ResourceDictionary>

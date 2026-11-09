@@ -13,9 +13,13 @@ namespace InteractiveMenu.Models
         VolumeMute,
         VolumeUp,
         VolumeDown,
+        SwitchAudioDevice,
         MediaPlayPause,
         MediaNext,
         MediaPrev,
+        Brightness,
+        ScreenshotArea,
+        ScreenshotFull,
         Delay,
         LockPC,
         Sleep,
@@ -40,6 +44,7 @@ namespace InteractiveMenu.Models
                 {
                     Raise(nameof(NeedsArgument));
                     Raise(nameof(CanBrowse));
+                    Raise(nameof(CanPickDevice));
                     Raise(nameof(Hint));
                     Raise(nameof(Placeholder));
                     Raise(nameof(Title));
@@ -66,10 +71,13 @@ namespace InteractiveMenu.Models
         [JsonIgnore]
         public bool NeedsArgument => Type is ActionType.OpenPath or ActionType.OpenUrl or ActionType.RunCommand
             or ActionType.RunCommandWindow or ActionType.SendHotkey or ActionType.VolumeUp
-            or ActionType.VolumeDown or ActionType.Delay;
+            or ActionType.VolumeDown or ActionType.Delay or ActionType.SwitchAudioDevice or ActionType.Brightness;
 
         [JsonIgnore]
         public bool CanBrowse => Type == ActionType.OpenPath;
+
+        [JsonIgnore]
+        public bool CanPickDevice => Type == ActionType.SwitchAudioDevice;
 
         [JsonIgnore]
         public string Hint => Type switch
@@ -81,6 +89,10 @@ namespace InteractiveMenu.Models
             ActionType.SendHotkey => "Комбинация клавиш, например: Ctrl+Shift+Esc, Win+D, Alt+F4",
             ActionType.VolumeUp => "На сколько процентов поднять (по умолчанию 10)",
             ActionType.VolumeDown => "На сколько процентов опустить (по умолчанию 10)",
+            ActionType.SwitchAudioDevice => "Пусто — переключать устройства по кругу. Или часть названия, например «Наушники». Можно несколько через | — будет чередовать их.",
+            ActionType.Brightness => "+10 / -10 — изменить, 70 — поставить ровно. Работает на ноутбуке и на мониторах с DDC/CI.",
+            ActionType.ScreenshotArea => "Выделяешь область мышкой — картинка в буфере обмена (штатные «Ножницы» Windows)",
+            ActionType.ScreenshotFull => "Снимок монитора с курсором: сохраняется в Изображения\\Screenshots и копируется в буфер",
             ActionType.Delay => "Пауза в миллисекундах (1000 = 1 сек)",
             ActionType.VolumeMute => "Включает / выключает звук",
             ActionType.Shutdown => "Выключает ПК сразу, без вопросов",
@@ -103,6 +115,8 @@ namespace InteractiveMenu.Models
             ActionType.SendHotkey => "Ctrl+Shift+Esc",
             ActionType.VolumeUp => "10",
             ActionType.VolumeDown => "10",
+            ActionType.SwitchAudioDevice => "по кругу   или   Наушники | Динамики",
+            ActionType.Brightness => "+10",
             ActionType.Delay => "500",
             _ => ""
         };
@@ -117,9 +131,13 @@ namespace InteractiveMenu.Models
             ActionType.VolumeMute => "🔇 Вкл/выкл звук",
             ActionType.VolumeUp => "🔊 Громче",
             ActionType.VolumeDown => "🔉 Тише",
+            ActionType.SwitchAudioDevice => "🎧 Сменить устройство вывода",
             ActionType.MediaPlayPause => "⏯ Плей / пауза",
             ActionType.MediaNext => "⏭ Следующий трек",
             ActionType.MediaPrev => "⏮ Предыдущий трек",
+            ActionType.Brightness => "🔆 Яркость монитора",
+            ActionType.ScreenshotArea => "✂ Скриншот области",
+            ActionType.ScreenshotFull => "📷 Скриншот экрана",
             ActionType.Delay => "⏱ Пауза",
             ActionType.LockPC => "🔒 Заблокировать ПК",
             ActionType.Sleep => "💤 Спящий режим",

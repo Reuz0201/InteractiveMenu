@@ -15,18 +15,29 @@
         <Image x:Name="ShotSharp" Stretch="Fill" RenderOptions.BitmapScalingMode="LowQuality" />
         <Image x:Name="ShotBlur" Stretch="Fill" Opacity="0" RenderOptions.BitmapScalingMode="Linear" />
 
-        <!-- затемнение; клик по пустому месту закрывает меню -->
-        <Rectangle x:Name="Dim" Fill="#07070D" Opacity="0"
-                   MouseLeftButtonDown="Dim_MouseLeftButtonDown" />
+        <!-- затемнение (и подложка для кликов по пустому месту) -->
+        <Rectangle x:Name="Dim" Fill="#07070D" Opacity="0" />
 
         <Canvas x:Name="LineLayer" IsHitTestVisible="False" />
-        <Canvas x:Name="NodeLayer" />
+        <Canvas x:Name="NodeLayer" IsHitTestVisible="False" />
+
+        <!-- строка поиска -->
+        <Border x:Name="SearchPill"
+                HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,56,0,0"
+                Background="#D912121A" BorderBrush="#7F77DD" BorderThickness="1.5"
+                CornerRadius="20" Padding="20,9" IsHitTestVisible="False" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="🔎" FontFamily="Segoe UI Emoji" FontSize="16" Margin="0,0,10,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="SearchText" FontSize="17" Foreground="White" VerticalAlignment="Center" />
+                <TextBlock x:Name="SearchCount" FontSize="13" Foreground="#99FFFFFF" Margin="12,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
 
         <Border x:Name="HintPill"
                 HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,44"
                 Background="#8C12121A" BorderBrush="#33FFFFFF" BorderThickness="1"
                 CornerRadius="16" Padding="16,7" IsHitTestVisible="False" Opacity="0">
-            <TextBlock x:Name="HintText" FontSize="13" Foreground="#CCFFFFFF" />
+            <TextBlock x:Name="HintText" FontSize="13" Foreground="#CCFFFFFF" FontFamily="Segoe UI, Segoe UI Emoji" />
         </Border>
     </Grid>
 </Window>

@@ -57,6 +57,25 @@ namespace InteractiveMenu.Services
             File.WriteAllText(FilePath, JsonSerializer.Serialize(cfg, Options));
         }
 
+        public static void Export(AppConfig cfg, string path) =>
+            File.WriteAllText(path, JsonSerializer.Serialize(cfg, Options));
+
+        /// <summary>Читает экспортированный конфиг (или просто дерево меню).</summary>
+        public static AppConfig Import(string path)
+        {
+            string json = File.ReadAllText(path);
+            var cfg = JsonSerializer.Deserialize<AppConfig>(json, Options);
+            if (cfg?.Root == null)
+            {
+                var root = JsonSerializer.Deserialize<MenuNode>(json, Options);
+                if (root == null || root.Children.Count == 0)
+                    throw new InvalidDataException("в файле нет меню InteractiveMenu");
+                cfg = new AppConfig { Root = root };
+            }
+            cfg.Root.Kind = NodeKind.Category;
+            return cfg;
+        }
+
         public static AppConfig Clone(AppConfig cfg) =>
             JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(cfg, Options), Options);
 
@@ -76,6 +95,12 @@ namespace InteractiveMenu.Services
             return n;
         }
 
+        private static MenuNode Ctx(MenuNode node, string apps)
+        {
+            node.Apps = apps;
+            return node;
+        }
+
         private static ActionStep S(ActionType type, string arg = "", string extra = "") =>
             new ActionStep { Type = type, Argument = arg, ExtraArgs = extra };
 
@@ -89,6 +114,7 @@ namespace InteractiveMenu.Services
                     Btn("🔇", "Без звука", teal, S(ActionType.VolumeMute)),
                     Btn("🔊", "Громче", teal, S(ActionType.VolumeUp, "10")),
                     Btn("🔉", "Тише", teal, S(ActionType.VolumeDown, "10")),
+                    Btn("🎧", "Устройство", teal, S(ActionType.SwitchAudioDevice)),
                     Cat("🎵", "Музыка", teal,
                         Btn("⏮", "Назад", teal, S(ActionType.MediaPrev)),
                         Btn("⏯", "Пауза", teal, S(ActionType.MediaPlayPause)),
@@ -112,9 +138,17 @@ namespace InteractiveMenu.Services
                 Cat("⚡", "Система", coral,
                     Btn("🔒", "Блокировка", coral, S(ActionType.LockPC)),
                     Btn("💤", "Сон", coral, S(ActionType.Sleep)),
+                    Btn("🔆", "Ярче", coral, S(ActionType.Brightness, "+15")),
+                    Btn("🔅", "Темнее", coral, S(ActionType.Brightness, "-15")),
+                    Btn("✂", "Скриншот", coral, S(ActionType.ScreenshotArea)),
                     Cat("🔌", "Питание", red,
                         Btn("🔁", "Перезагрузка", red, S(ActionType.Restart)),
                         Btn("⛔", "Выключить", red, S(ActionType.Shutdown)))),
+                Ctx(Cat("🌐", "Браузер", "#00B8D9",
+                    Btn("➕", "Новая вкладка", "#00B8D9", S(ActionType.SendHotkey, "Ctrl+T")),
+                    Btn("↩", "Вернуть вкладку", "#00B8D9", S(ActionType.SendHotkey, "Ctrl+Shift+T")),
+                    Btn("✖", "Закрыть вкладку", "#00B8D9", S(ActionType.SendHotkey, "Ctrl+W"))),
+                    "chrome, msedge, firefox, opera, browser, yandex"),
                 Btn("⚙", "Настройки", gray, S(ActionType.OpenSettings)));
 
             return new AppConfig { Root = root };

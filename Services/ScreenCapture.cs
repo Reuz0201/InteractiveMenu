@@ -14,14 +14,14 @@ namespace InteractiveMenu.Services
     /// </summary>
     public static class ScreenCapture
     {
-        public static (BitmapSource Sharp, BitmapSource Blurred) Capture(int pxWidth, int pxHeight, bool blur)
+        public static (BitmapSource Sharp, BitmapSource Blurred) Capture(int pxLeft, int pxTop, int pxWidth, int pxHeight, bool blur)
         {
             pxWidth = Math.Max(1, pxWidth);
             pxHeight = Math.Max(1, pxHeight);
 
             using var full = new Bitmap(pxWidth, pxHeight, PixelFormat.Format32bppPArgb);
             using (var g = Graphics.FromImage(full))
-                g.CopyFromScreen(0, 0, 0, 0, new Size(pxWidth, pxHeight), CopyPixelOperation.SourceCopy);
+                g.CopyFromScreen(pxLeft, pxTop, 0, 0, new Size(pxWidth, pxHeight), CopyPixelOperation.SourceCopy);
 
             var sharp = ToSource(full);
             if (!blur) return (sharp, null);

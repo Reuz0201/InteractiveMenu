@@ -10,6 +10,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using InteractiveMenu.Models;
 using InteractiveMenu.Services;
+using WF = System.Windows.Forms;
 
 namespace InteractiveMenu.Views
 {
@@ -17,11 +18,13 @@ namespace InteractiveMenu.Views
     /// Полноэкранное окно с «деревом»: шар в центре, от него ветки к категориям,
     /// при наведении на категорию из неё вырастают новые ветки наружу.
     ///
+    /// Выбор без точного прицеливания: подсвечивается ближайший к курсору шарик,
+    /// так что достаточно просто «махнуть» мышкой в его сторону.
+    ///
     /// Про производительность:
-    ///  • окно НЕ прозрачное (AllowsTransparency=false): прозрачное окно на весь экран WPF рисует
-    ///    через CPU и копирует каждый кадр — отсюда были лаги. Фон — снимок экрана;
+    ///  • окно НЕ прозрачное — фон это снимок экрана, всё рисует видеокарта;
     ///  • никаких DropShadowEffect — свечение нарисовано градиентом;
-    ///  • каждый шарик кешируется на видеокарте (BitmapCache), анимации двигают готовую текстуру.
+    ///  • каждый шарик кешируется в текстуру (BitmapCache).
     /// </summary>
     public partial class MenuWindow : Window
     {
@@ -32,18 +35,19 @@ namespace InteractiveMenu.Views
             public int Depth;
             public double Size;
             public double Width;
+            public Point Target;
             public FrameworkElement Element;
             public ScaleTransform Scale;
             public TranslateTransform Translate;
-            public Ellipse Glow;
-            public TextBlock IconText;
+            public BallParts Parts;
             public TextBlock TitleText;
-            public Line Line;
+            public TextBlock SubText;
+            public Border Badge;
+            public TextBlock BadgeText;
+            public Branch Branch;
             public bool Removing;
             public TimeSpan PendingDelay;
         }
-
-        private sealed record Placement(MenuNode Node, MenuNode Parent, int Depth, Point Pos, double Angle);
 
         private static readonly Duration MoveDuration = TimeSpan.FromMilliseconds(300);
         private static readonly Duration FastDuration = TimeSpan.FromMilliseconds(140);
@@ -52,18 +56,28 @@ namespace InteractiveMenu.Views
 
         private readonly Dictionary<MenuNode, NodeVisual> _visuals = new Dictionary<MenuNode, NodeVisual>();
         private readonly Dictionary<MenuNode, MenuNode> _parents = new Dictionary<MenuNode, MenuNode>();
+        private readonly Dictionary<MenuNode, IList<MenuNode>> _visibleKids = new Dictionary<MenuNode, IList<MenuNode>>();
         private List<MenuNode> _path = new List<MenuNode>(); // раскрытая цепочка категорий (без корня)
 
         private AppConfig _cfg;
         private MenuNode _root;
         private MenuNode _hovered;
         private Point _center;
+        private Point _pointer;
         private DateTime _openedAt;
         private bool _isOpen;
         private bool _clickMode;
         private bool _renderHooked;
         private IntPtr _prevForeground;
+        private System.Drawing.Point _savedCursor;
         private Action _afterClose;
+        private string _ctxApp;
+        private bool _hasContextNodes;
+        private LiveStatus _live;
+        private int _session;
+
+        private string _query = "";
+        private List<MenuNode> _matches = new List<MenuNode>();
 
         public bool IsOpen => _isOpen;
 
@@ -87,13 +101,11 @@ namespace InteractiveMenu.Views
                 if (_isOpen && _clickMode) CloseMenu();
             };
 
-            KeyDown += (s, e) =>
-            {
-                if (e.Key == Key.Escape) CloseMenu();
-                else if (e.Key == Key.Back) GoBack();
-            };
-
+            MouseMove += (s, e) => UpdatePointer(e.GetPosition(this));
+            MouseLeftButtonUp += (s, e) => OnLeftClick();
             MouseRightButtonUp += (s, e) => GoBack();
+            PreviewKeyDown += OnKeyDown;
+            TextInput += OnTextInput;
         }
 
         private static IEasingFunction Freeze(EasingFunctionBase e)
@@ -102,9 +114,7 @@ namespace InteractiveMenu.Views
             return e;
         }
 
-        /// <summary>
-        /// Создаём окно и Direct3D-поверхность заранее, за экраном, чтобы первое открытие было мгновенным.
-        /// </summary>
+        /// <summary>Создаём окно и Direct3D-поверхность заранее, за экраном, чтобы первое открытие было мгновенным.</summary>
         public void WarmUp()
         {
             Left = -32000;
@@ -123,28 +133,49 @@ namespace InteractiveMenu.Views
         {
             if (root == null || cfg == null) return;
 
+            _session++;
             _prevForeground = NativeMethods.GetForegroundWindow();
+            _ctxApp = ForegroundApp.ProcessNameOf(_prevForeground);
             _cfg = cfg;
             _root = root;
             _path = new List<MenuNode>();
             _hovered = null;
             _clickMode = clickMode;
             _afterClose = null;
+            _query = "";
+            _matches = new List<MenuNode>();
+            SearchPill.Visibility = Visibility.Collapsed;
 
             _parents.Clear();
-            IndexParents(root);
+            _visibleKids.Clear();
+            _hasContextNodes = false;
+            IndexTree(root);
 
             LineLayer.Children.Clear();
             NodeLayer.Children.Clear();
             _visuals.Clear();
 
-            Left = 0;
-            Top = 0;
-            Width = SystemParameters.PrimaryScreenWidth;
-            Height = SystemParameters.PrimaryScreenHeight;
+            // монитор, на котором сейчас курсор
+            _savedCursor = WF.Cursor.Position;
+            var screen = WF.Screen.FromPoint(_savedCursor);
+            var bounds = screen.Bounds;
+            var dpi = VisualTreeHelper.GetDpi(this);
+            Left = bounds.Left / dpi.DpiScaleX;
+            Top = bounds.Top / dpi.DpiScaleY;
+            Width = bounds.Width / dpi.DpiScaleX;
+            Height = bounds.Height / dpi.DpiScaleY;
             _center = new Point(Width / 2, Height / 2);
 
-            CaptureBackground();
+            CaptureBackground(bounds);
+
+            // курсор — в центр меню: дальше достаточно «махнуть» в сторону нужного шарика.
+            // После закрытия вернём его на место.
+            NativeMethods.SetCursorPos(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
+            _pointer = _center;
+
+            _live = LiveStatus.ReadFast();
+            StartSlowLiveRead();
+
             UpdateHint();
 
             ClearAnim(NodeLayer);
@@ -157,6 +188,7 @@ namespace InteractiveMenu.Views
 
             if (!IsVisible) Show();
             Activate();
+            Focus();
 
             var fadeIn = new Duration(TimeSpan.FromMilliseconds(170));
             ShotBlur.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, fadeIn));
@@ -172,14 +204,11 @@ namespace InteractiveMenu.Views
             UpdateTree();
         }
 
-        private void CaptureBackground()
+        private void CaptureBackground(System.Drawing.Rectangle bounds)
         {
             try
             {
-                var dpi = VisualTreeHelper.GetDpi(this);
-                int pxW = (int)Math.Round(Width * dpi.DpiScaleX);
-                int pxH = (int)Math.Round(Height * dpi.DpiScaleY);
-                var (sharp, blurred) = ScreenCapture.Capture(pxW, pxH, _cfg.BlurBackground);
+                var (sharp, blurred) = ScreenCapture.Capture(bounds.Left, bounds.Top, bounds.Width, bounds.Height, _cfg.BlurBackground);
                 ShotSharp.Source = sharp;
                 ShotBlur.Source = blurred ?? sharp;
             }
@@ -199,6 +228,8 @@ namespace InteractiveMenu.Views
             if (!_isOpen) return;
             _isOpen = false;
             _afterClose = after;
+
+            NativeMethods.SetCursorPos(_savedCursor.X, _savedCursor.Y);
 
             var fade = new DoubleAnimation(0, FastDuration);
             fade.Completed += (s, e) =>
@@ -223,11 +254,20 @@ namespace InteractiveMenu.Views
             NodeLayer.BeginAnimation(OpacityProperty, new DoubleAnimation(0, FastDuration));
             LineLayer.BeginAnimation(OpacityProperty, new DoubleAnimation(0, FastDuration));
             HintPill.BeginAnimation(OpacityProperty, new DoubleAnimation(0, FastDuration));
+            SearchPill.Visibility = Visibility.Collapsed;
             Dim.BeginAnimation(OpacityProperty, new DoubleAnimation(0, FastDuration));
             ShotBlur.BeginAnimation(OpacityProperty, fade);
         }
 
         private static void ClearAnim(UIElement el) => el.BeginAnimation(OpacityProperty, null);
+
+        /// <summary>Esc: сначала сбрасывает поиск, потом закрывает меню.</summary>
+        public void OnEscape()
+        {
+            if (!_isOpen) return;
+            if (_query.Length > 0) SetQuery("");
+            else CloseMenu();
+        }
 
         /// <summary>Вызывается, когда отпустили хоткей.</summary>
         public void OnHotkeyReleased()
@@ -236,22 +276,22 @@ namespace InteractiveMenu.Views
 
             double heldMs = (DateTime.Now - _openedAt).TotalMilliseconds;
 
-            // отпустил над кнопкой — выполняем
+            // отпустил, когда выбрана кнопка — выполняем
             if (_hovered != null && _hovered != _root && !_hovered.IsCategory)
             {
                 Choose(_hovered);
                 return;
             }
 
-            // быстро тапнул хоткей или отпустил над категорией — меню остаётся, дальше мышкой
-            if (heldMs < 350 || (_hovered != null && _hovered.IsCategory))
+            // быстро тапнул хоткей или отпустил над категорией/центром — меню остаётся, дальше мышкой
+            if (heldMs < 350 || _hovered != null)
             {
                 _clickMode = true;
                 UpdateHint();
                 return;
             }
 
-            // долго держал и отпустил в пустоте — отмена
+            // долго держал и увёл мышку далеко от всех шариков — отмена
             CloseMenu();
         }
 
@@ -268,7 +308,11 @@ namespace InteractiveMenu.Views
         private void GoBack()
         {
             if (!_isOpen) return;
-            if (_path.Count > 0)
+            if (_query.Length > 0)
+            {
+                SetQuery("");
+            }
+            else if (_path.Count > 0)
             {
                 _path = _path.Take(_path.Count - 1).ToList();
                 UpdateTree();
@@ -279,81 +323,60 @@ namespace InteractiveMenu.Views
             }
         }
 
-        private void Dim_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => CloseMenu();
+        private void OnLeftClick()
+        {
+            if (!_isOpen) return;
+            if (_hovered == null) CloseMenu();
+            else OnClick(_hovered);
+        }
 
         private void UpdateHint()
         {
-            HintText.Text = _clickMode
-                ? "ЛКМ — выбрать    ·    ПКМ — назад    ·    Esc — закрыть"
-                : "Наведи и отпусти хоткей над кнопкой    ·    отпустить в пустоте — отмена";
+            string ctx = _hasContextNodes && _ctxApp != null ? $"🎯 {_ctxApp}    ·    " : "";
+            HintText.Text = ctx + (_query.Length > 0
+                ? "Enter — выполнить    ·    Esc — сбросить поиск"
+                : _clickMode
+                    ? "ЛКМ — выбрать    ·    ПКМ — назад    ·    печатай для поиска    ·    Esc — закрыть"
+                    : "Махни мышкой к кнопке и отпусти хоткей    ·    отпустить вдали от шариков — отмена");
         }
 
-        // ================== раскладка дерева ==================
+        // ================== дерево и контекст ==================
 
-        private void IndexParents(MenuNode node)
+        private void IndexTree(MenuNode node)
         {
-            foreach (var child in node.Children)
+            var kids = node.Children.Where(c => c.IsVisibleFor(_ctxApp)).ToList();
+            _visibleKids[node] = kids;
+            foreach (var child in kids)
             {
+                if (child.HasApps) _hasContextNodes = true;
                 _parents[child] = node;
-                IndexParents(child);
+                IndexTree(child);
             }
         }
+
+        private IList<MenuNode> KidsOf(MenuNode node) =>
+            _visibleKids.TryGetValue(node, out var kids) ? kids : Array.Empty<MenuNode>();
 
         private double K => Math.Clamp(_cfg?.BallScale ?? 1.0, 0.6, 1.6);
 
-        private static Vector Polar(double radius, double angleDeg)
-        {
-            double r = angleDeg * Math.PI / 180;
-            return new Vector(Math.Cos(r) * radius, Math.Sin(r) * radius);
-        }
+        private BallTheme Theme => _cfg?.Theme ?? BallTheme.Glass;
 
         private Point Clamp(Point p) => new Point(
             Math.Clamp(p.X, 70, Math.Max(70, Width - 70)),
-            Math.Clamp(p.Y, 60, Math.Max(60, Height - 120)));
-
-        private List<Placement> ComputeLayout()
-        {
-            var list = new List<Placement> { new Placement(_root, null, 0, _center, -90) };
-
-            // первый уровень — кругом вокруг центра
-            int n = _root.Children.Count;
-            double r1 = Math.Max(190, n * 30) * K;
-            for (int i = 0; i < n; i++)
-            {
-                double angle = -90 + 360.0 * i / n;
-                list.Add(new Placement(_root.Children[i], _root, 1, Clamp(_center + Polar(r1, angle)), angle));
-            }
-
-            // раскрытые категории — веером наружу, в направлении ветки
-            for (int d = 0; d < _path.Count; d++)
-            {
-                var cat = _path[d];
-                var parentPl = list.FirstOrDefault(p => p.Node == cat);
-                if (parentPl == null) break;
-
-                int m = cat.Children.Count;
-                if (m == 0) continue;
-
-                double spread = m == 1 ? 0 : Math.Min(130, (m - 1) * 34);
-                double dist = (150 + Math.Max(0, m - 4) * 14) * K;
-                for (int j = 0; j < m; j++)
-                {
-                    double a = parentPl.Angle + (m == 1 ? 0 : -spread / 2 + spread * j / (m - 1));
-                    list.Add(new Placement(cat.Children[j], cat, d + 2, Clamp(parentPl.Pos + Polar(dist, a)), a));
-                }
-            }
-
-            return list;
-        }
+            Math.Clamp(p.Y, 60, Math.Max(60, Height - 130)));
 
         private void UpdateTree()
         {
-            var placements = ComputeLayout();
-            var desired = new HashSet<MenuNode>(placements.Select(p => p.Node));
+            var placements = _query.Length > 0
+                ? MenuLayout.ComputeSearch(_root, _matches, _center, K, Clamp)
+                : MenuLayout.Compute(_root, _path, _center, K, KidsOf, Clamp);
+
+            var desired = placements.ToDictionary(p => p.Node);
 
             foreach (var kv in _visuals.ToList())
             {
-                if (!desired.Contains(kv.Key))
+                // шарик пропал или сменил место в дереве (например, при поиске) — пересоздаём
+                if (!desired.TryGetValue(kv.Key, out var p) || p.Depth != kv.Value.Depth || p.Parent != kv.Value.Parent)
                 {
                     RemoveVisual(kv.Value);
                     _visuals.Remove(kv.Key);
@@ -374,6 +397,7 @@ namespace InteractiveMenu.Views
                     nv.PendingDelay = TimeSpan.FromMilliseconds(p.Depth == 0 ? 0 : Math.Min(born, 10) * 16);
                     born++;
                 }
+                nv.Target = p.Pos;
                 MoveTo(nv, p.Pos, MoveDuration, nv.PendingDelay);
             }
 
@@ -385,108 +409,77 @@ namespace InteractiveMenu.Views
         private NodeVisual CreateVisual(Placement p)
         {
             var node = p.Node;
-            double size = (p.Depth == 0 ? 124 : p.Depth == 1 ? 88 : 70) * K;
-            double width = size + 90;
+            double k = K;
+            double size = MenuLayout.BallSize(p.Depth, k);
+            double width = size + 100;
             var color = ColorUtil.Parse(node.Color);
 
-            var ball = new Grid
-            {
-                Width = size,
-                Height = size,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Top
-            };
+            var parts = BallFactory.Create(node, size, node.IsCategory && p.Depth > 0, Theme);
 
-            // свечение — обычный радиальный градиент, а не эффект
-            var glow = new Ellipse
+            // бейдж живого состояния (громкость, яркость, ▶)
+            var badgeText = new TextBlock
             {
-                Width = size * 2,
-                Height = size * 2,
-                Margin = new Thickness(-size / 2),
-                Fill = ColorUtil.GlowBrush(color),
-                Opacity = 0.55,
-                IsHitTestVisible = false
-            };
-            ball.Children.Add(glow);
-
-            if (node.IsCategory && p.Depth > 0)
-            {
-                // у категорий — пунктирное кольцо, чтобы отличать от кнопок
-                ball.Children.Add(new Ellipse
-                {
-                    Width = size + 14,
-                    Height = size + 14,
-                    Margin = new Thickness(-7),
-                    Stroke = new SolidColorBrush(ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.35), 190)),
-                    StrokeThickness = 1.5,
-                    StrokeDashArray = new DoubleCollection { 3, 3 },
-                    IsHitTestVisible = false
-                });
-            }
-
-            ball.Children.Add(new Ellipse
-            {
-                Width = size,
-                Height = size,
-                Fill = ColorUtil.BallBrush(color),
-                Stroke = new SolidColorBrush(ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.6), 210)),
-                StrokeThickness = 1.5
-            });
-
-            // блик
-            var gloss = new LinearGradientBrush(Color.FromArgb(90, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90);
-            gloss.Freeze();
-            ball.Children.Add(new Ellipse
-            {
-                Width = size * 0.56,
-                Height = size * 0.34,
-                Margin = new Thickness(0, size * 0.08, 0, 0),
-                VerticalAlignment = VerticalAlignment.Top,
-                Fill = gloss,
-                IsHitTestVisible = false
-            });
-
-            var icon = new TextBlock
-            {
-                Text = node.Icon,
-                FontFamily = new FontFamily("Segoe UI Emoji"),
-                FontSize = size * 0.38,
+                FontSize = Math.Max(10, 11 * Math.Sqrt(k)),
+                FontWeight = FontWeights.SemiBold,
                 Foreground = Brushes.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
+                FontFamily = new FontFamily("Segoe UI, Segoe UI Emoji")
+            };
+            var badge = new Border
+            {
+                Child = badgeText,
+                Background = new SolidColorBrush(Color.FromArgb(235, 16, 16, 24)),
+                BorderBrush = new SolidColorBrush(ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.3), 200)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(9),
+                Padding = new Thickness(6, 1, 6, 2),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, -6, -16, 0),
+                Visibility = Visibility.Collapsed,
                 IsHitTestVisible = false
             };
-            ball.Children.Add(icon);
+            parts.Ball.Children.Add(badge);
 
             var title = new TextBlock
             {
                 Text = node.Title,
                 Foreground = Brushes.White,
-                FontSize = (p.Depth == 0 ? 15 : 12.5) * Math.Sqrt(K),
+                FontSize = (p.Depth == 0 ? 15 : 12.5) * Math.Sqrt(k),
                 FontWeight = FontWeights.SemiBold,
                 TextAlignment = TextAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
+            var sub = new TextBlock
+            {
+                Foreground = new SolidColorBrush(Color.FromArgb(200, 255, 255, 255)),
+                FontSize = 11 * Math.Sqrt(k),
+                TextAlignment = TextAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Visibility = Visibility.Collapsed
+            };
+            var titleStack = new StackPanel();
+            titleStack.Children.Add(title);
+            titleStack.Children.Add(sub);
             var titlePill = new Border
             {
-                Child = title,
-                Background = new SolidColorBrush(Color.FromArgb(120, 10, 10, 16)),
+                Child = titleStack,
+                Background = new SolidColorBrush(Color.FromArgb(125, 10, 10, 16)),
                 CornerRadius = new CornerRadius(9),
                 Padding = new Thickness(8, 2, 8, 3),
                 MaxWidth = width,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Bottom
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, size + 8, 0, 0)
             };
 
             var container = new Grid
             {
                 Width = width,
-                Height = size + 40,
-                Cursor = Cursors.Hand,
+                Height = size + 64,
                 // шарик рендерится один раз в текстуру; масштаб/сдвиг/прозрачность — силами видеокарты
                 CacheMode = new BitmapCache { RenderAtScale = 1.25, SnapsToDevicePixels = false }
             };
-            container.Children.Add(ball);
+            container.Children.Add(parts.Ball);
             container.Children.Add(titlePill);
 
             var scale = new ScaleTransform(0, 0, width / 2, size / 2);
@@ -496,57 +489,40 @@ namespace InteractiveMenu.Views
             group.Children.Add(translate);
             container.RenderTransform = group;
 
-            container.MouseEnter += (s, e) => OnHover(node);
-            container.MouseLeave += (s, e) =>
-            {
-                if (_hovered == node)
-                {
-                    _hovered = null;
-                    UpdateStates();
-                }
-            };
-            container.MouseLeftButtonUp += (s, e) =>
-            {
-                e.Handled = true;
-                OnClick(node);
-            };
-
-            Line line = null;
+            Branch branch = null;
             if (p.Parent != null)
             {
-                line = new Line
-                {
-                    Stroke = new SolidColorBrush(ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.25), 175)),
-                    StrokeThickness = (p.Depth == 1 ? 3 : 2) * K,
-                    StrokeStartLineCap = PenLineCap.Round,
-                    StrokeEndLineCap = PenLineCap.Round
-                };
-                LineLayer.Children.Add(line);
+                branch = new Branch(BallFactory.BranchBrush(color, Theme), BallFactory.BranchThickness(p.Depth, k, Theme), _cfg.CurvedBranches);
+                LineLayer.Children.Add(branch.Shape);
             }
 
             NodeLayer.Children.Add(container);
 
-            return new NodeVisual
+            var nv = new NodeVisual
             {
                 Node = node,
                 Parent = p.Parent,
                 Depth = p.Depth,
                 Size = size,
                 Width = width,
+                Target = p.Pos,
                 Element = container,
                 Scale = scale,
                 Translate = translate,
-                Glow = glow,
-                IconText = icon,
+                Parts = parts,
                 TitleText = title,
-                Line = line
+                SubText = sub,
+                Badge = badge,
+                BadgeText = badgeText,
+                Branch = branch
             };
+            ApplyLive(nv);
+            return nv;
         }
 
         private void RemoveVisual(NodeVisual nv)
         {
             nv.Removing = true;
-            nv.Element.IsHitTestVisible = false;
 
             if (nv.Parent != null && _visuals.TryGetValue(nv.Parent, out var pv))
                 MoveTo(nv, CenterOf(pv), FastDuration, TimeSpan.Zero); // втягивается обратно в родителя
@@ -555,11 +531,11 @@ namespace InteractiveMenu.Views
             fade.Completed += (s, e) =>
             {
                 NodeLayer.Children.Remove(nv.Element);
-                if (nv.Line != null) LineLayer.Children.Remove(nv.Line);
+                if (nv.Branch != null) LineLayer.Children.Remove(nv.Branch.Shape);
             };
             nv.Scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.3, FastDuration));
             nv.Scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.3, FastDuration));
-            nv.Line?.BeginAnimation(OpacityProperty, new DoubleAnimation(0, FastDuration));
+            nv.Branch?.Shape.BeginAnimation(OpacityProperty, new DoubleAnimation(0, FastDuration));
             nv.Element.BeginAnimation(OpacityProperty, fade);
         }
 
@@ -593,7 +569,7 @@ namespace InteractiveMenu.Views
             v.Scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(to, dur) { EasingFunction = PopEase, BeginTime = delay });
         }
 
-        /// <summary>Подсветка наведённого, затемнение невыбранных веток.</summary>
+        /// <summary>Подсветка выбранного, затемнение невыбранных веток.</summary>
         private void UpdateStates()
         {
             foreach (var nv in _visuals.Values)
@@ -603,51 +579,162 @@ namespace InteractiveMenu.Views
                 bool hovered = nv.Node == _hovered;
                 bool onPath = _path.Contains(nv.Node);
 
-                AnimateScale(nv, hovered ? 1.14 : onPath ? 1.05 : 1.0, nv.PendingDelay);
+                AnimateScale(nv, hovered ? 1.15 : onPath ? 1.05 : 1.0, nv.PendingDelay);
                 nv.PendingDelay = TimeSpan.Zero;
 
-                double glow = hovered ? 1.0 : onPath ? 0.8 : 0.5;
-                if (Math.Abs(nv.Glow.Opacity - glow) > 0.01)
-                    nv.Glow.BeginAnimation(OpacityProperty, new DoubleAnimation(glow, FastDuration));
+                double baseGlow = nv.Parts.GlowBase;
+                double glow = hovered ? 1.0 : onPath ? Math.Min(1, baseGlow + 0.25) : baseGlow;
+                if (Math.Abs(nv.Parts.Glow.Opacity - glow) > 0.01)
+                    nv.Parts.Glow.BeginAnimation(OpacityProperty, new DoubleAnimation(glow, FastDuration));
 
                 double opacity = 1;
-                if (nv.Depth >= 1 && _path.Count >= nv.Depth && _path[nv.Depth - 1] != nv.Node)
+                if (_query.Length == 0 && nv.Depth >= 1 && _path.Count >= nv.Depth && _path[nv.Depth - 1] != nv.Node)
                     opacity = 0.38;
 
                 if (Math.Abs(nv.Element.Opacity - opacity) > 0.01)
                 {
                     nv.Element.BeginAnimation(OpacityProperty, new DoubleAnimation(opacity, FastDuration));
-                    nv.Line?.BeginAnimation(OpacityProperty, new DoubleAnimation(opacity * 0.9, FastDuration));
+                    nv.Branch?.Shape.BeginAnimation(OpacityProperty, new DoubleAnimation(opacity * 0.9, FastDuration));
                 }
             }
 
-            // центральный шар показывает, что сейчас под курсором
+            // центральный шар показывает, что сейчас выбрано
             if (_root != null && _visuals.TryGetValue(_root, out var rootVisual))
             {
                 var shown = _hovered != null && _hovered != _root ? _hovered : _root;
                 if (rootVisual.TitleText.Text != shown.Title) rootVisual.TitleText.Text = shown.Title;
-                if (rootVisual.IconText.Text != shown.Icon) rootVisual.IconText.Text = shown.Icon;
+                if (rootVisual.Parts.Icon.Text != shown.Icon) rootVisual.Parts.Icon.Text = shown.Icon;
             }
         }
 
-        // ================== ввод ==================
+        // ================== живые состояния ==================
+
+        private void StartSlowLiveRead()
+        {
+            bool needMedia = false, needBrightness = false;
+            void Scan(MenuNode n)
+            {
+                var t = n.IsCategory ? (ActionType?)null : n.Steps.FirstOrDefault()?.Type;
+                if (t is ActionType.MediaPlayPause or ActionType.MediaNext or ActionType.MediaPrev) needMedia = true;
+                if (t == ActionType.Brightness) needBrightness = true;
+                foreach (var c in n.Children) Scan(c);
+            }
+            Scan(_root);
+            if (!needMedia && !needBrightness) return;
+
+            int session = _session;
+            var live = _live;
+            _ = RefreshLiveAsync(live, needMedia, needBrightness, session);
+        }
+
+        private async System.Threading.Tasks.Task RefreshLiveAsync(LiveStatus live, bool media, bool brightness, int session)
+        {
+            await live.ReadSlowAsync(media, brightness);
+            if (session != _session || !_isOpen) return;
+            foreach (var nv in _visuals.Values) ApplyLive(nv);
+        }
+
+        private void ApplyLive(NodeVisual nv)
+        {
+            if (_live == null) return;
+            var step = nv.Node.IsCategory ? null : nv.Node.Steps.FirstOrDefault();
+            string badge = null, sub = null;
+
+            switch (step?.Type)
+            {
+                case ActionType.VolumeMute:
+                    if (_live.Volume != null) badge = _live.Muted ? "🔇 выкл" : $"{_live.Volume}%";
+                    break;
+                case ActionType.VolumeUp:
+                case ActionType.VolumeDown:
+                    if (_live.Volume != null) badge = _live.Muted ? "🔇" : $"{_live.Volume}%";
+                    break;
+                case ActionType.SwitchAudioDevice:
+                    sub = _live.OutputDevice;
+                    break;
+                case ActionType.MediaPlayPause:
+                    sub = _live.MediaTitle;
+                    if (_live.MediaPlaying != null) badge = _live.MediaPlaying.Value ? "▶" : "❚❚";
+                    break;
+                case ActionType.MediaNext:
+                case ActionType.MediaPrev:
+                    sub = _live.MediaTitle;
+                    break;
+                case ActionType.Brightness:
+                    if (_live.BrightnessLevel != null) badge = $"🔆 {_live.BrightnessLevel}%";
+                    break;
+            }
+
+            nv.BadgeText.Text = badge ?? "";
+            nv.Badge.Visibility = badge == null ? Visibility.Collapsed : Visibility.Visible;
+            nv.SubText.Text = sub ?? "";
+            nv.SubText.Visibility = string.IsNullOrWhiteSpace(sub) ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        // ================== выбор без прицеливания ==================
+
+        /// <summary>
+        /// Выбирается шарик, ближайший к курсору (по расстоянию до его края). Небольшой «гистерезис»
+        /// не даёт выбору дрожать на границе между соседями. Слишком далеко от всех — ничего не выбрано.
+        /// </summary>
+        private void UpdatePointer(Point p)
+        {
+            _pointer = p;
+            if (!_isOpen) return;
+
+            NodeVisual best = null;
+            double bestD = double.MaxValue;
+            foreach (var nv in _visuals.Values)
+            {
+                if (nv.Removing) continue;
+                double d = (nv.Target - p).Length - nv.Size / 2;
+                if (d < bestD)
+                {
+                    bestD = d;
+                    best = nv;
+                }
+            }
+
+            MenuNode pick = best?.Node;
+            if (bestD > 230 * K) pick = null;
+
+            if (pick != _hovered && _hovered != null && pick != null && _visuals.TryGetValue(_hovered, out var cur) && !cur.Removing)
+            {
+                double curD = (cur.Target - p).Length - cur.Size / 2;
+                if (curD - bestD < 16) pick = _hovered;
+            }
+
+            if (pick == _hovered) return;
+            if (pick == null)
+            {
+                _hovered = null;
+                UpdateStates();
+            }
+            else
+            {
+                OnHover(pick);
+            }
+        }
 
         private void OnHover(MenuNode node)
         {
             if (!_isOpen) return;
             _hovered = node;
 
-            if (node == _root)
+            if (_query.Length == 0)
             {
-                // наведение на центр ничего не сворачивает — просто подсветка
-            }
-            else if (node.IsCategory)
-            {
-                ExpandTo(node);
-            }
-            else if (_parents.TryGetValue(node, out var parent))
-            {
-                ExpandTo(parent); // сворачиваем чужие ветки, оставляем путь до этой кнопки
+                if (node == _root)
+                {
+                    // центр ничего не сворачивает — просто подсветка
+                }
+                else if (node.IsCategory)
+                {
+                    ExpandTo(node);
+                }
+                else if (_parents.TryGetValue(node, out var parent))
+                {
+                    ExpandTo(parent); // сворачиваем чужие ветки, оставляем путь до этой кнопки
+                }
             }
 
             UpdateStates();
@@ -659,11 +746,13 @@ namespace InteractiveMenu.Views
 
             if (node == _root)
             {
+                if (_query.Length > 0) SetQuery("");
                 _path = new List<MenuNode>();
                 UpdateTree();
             }
             else if (node.IsCategory)
             {
+                if (_query.Length > 0) SetQuery("");
                 ExpandTo(node);
             }
             else
@@ -689,20 +778,108 @@ namespace InteractiveMenu.Views
             }
         }
 
+        // ================== поиск ==================
+
+        private void OnTextInput(object sender, TextCompositionEventArgs e)
+        {
+            if (!_isOpen || string.IsNullOrEmpty(e.Text)) return;
+            var add = new string(e.Text.Where(c => char.IsLetterOrDigit(c) || c == ' ' || c == '-' || c == '.').ToArray());
+            if (add.Length == 0) return;
+            if (_query.Length == 0 && add.Trim().Length == 0) return;
+            e.Handled = true;
+            SetQuery(_query + add);
+        }
+
+        private void OnKeyDown(object sender, KeyEventArgs e)
+        {
+            if (!_isOpen) return;
+            switch (e.Key)
+            {
+                case Key.Escape:
+                    e.Handled = true;
+                    OnEscape();
+                    break;
+                case Key.Back:
+                    e.Handled = true;
+                    if (_query.Length > 0) SetQuery(_query.Substring(0, _query.Length - 1));
+                    else GoBack();
+                    break;
+                case Key.Enter:
+                    e.Handled = true;
+                    var target = _hovered != null && _hovered != _root ? _hovered : _matches.FirstOrDefault();
+                    if (target != null) OnClick(target);
+                    break;
+            }
+        }
+
+        private void SetQuery(string query)
+        {
+            _query = query ?? "";
+            _path = new List<MenuNode>();
+
+            if (_query.Length == 0)
+            {
+                _matches = new List<MenuNode>();
+                SearchPill.Visibility = Visibility.Collapsed;
+                _hovered = null;
+            }
+            else
+            {
+                _clickMode = true; // начал печатать — значит управляешь с клавиатуры/мышки, а не хоткеем
+                _matches = FindMatches(_query);
+                SearchPill.Visibility = Visibility.Visible;
+                SearchText.Text = _query;
+                SearchCount.Text = _matches.Count == 0 ? "ничего не нашёл" : MenuNode.Plural(_matches.Count, "кнопка", "кнопки", "кнопок");
+                _hovered = _matches.FirstOrDefault();
+            }
+
+            UpdateHint();
+            UpdateTree();
+        }
+
+        private List<MenuNode> FindMatches(string query)
+        {
+            string q = query.Trim();
+            var all = new List<MenuNode>();
+            void Walk(MenuNode n)
+            {
+                foreach (var c in KidsOf(n))
+                {
+                    if (!c.IsCategory) all.Add(c);
+                    Walk(c);
+                }
+            }
+            Walk(_root);
+
+            return all
+                .Select(n => (n, score: Score(n.Title ?? "", q)))
+                .Where(x => x.score > 0)
+                .OrderByDescending(x => x.score)
+                .Take(10)
+                .Select(x => x.n)
+                .ToList();
+        }
+
+        /// <summary>Начало названия &gt; начало слова &gt; где-то внутри.</summary>
+        private static int Score(string title, string q)
+        {
+            if (q.Length == 0) return 0;
+            if (title.StartsWith(q, StringComparison.CurrentCultureIgnoreCase)) return 3;
+            int i = title.IndexOf(q, StringComparison.CurrentCultureIgnoreCase);
+            if (i > 0 && !char.IsLetterOrDigit(title[i - 1])) return 2;
+            return i >= 0 ? 1 : 0;
+        }
+
+        // ================== кадр ==================
+
         private void OnRendering(object sender, EventArgs e)
         {
             // ветки всегда тянутся за шариками, даже во время анимации
             foreach (var nv in _visuals.Values)
             {
-                if (nv.Line == null || nv.Parent == null) continue;
+                if (nv.Branch == null || nv.Parent == null) continue;
                 if (!_visuals.TryGetValue(nv.Parent, out var pv)) continue;
-
-                var a = CenterOf(pv);
-                var b = CenterOf(nv);
-                if (nv.Line.X1 != a.X) nv.Line.X1 = a.X;
-                if (nv.Line.Y1 != a.Y) nv.Line.Y1 = a.Y;
-                if (nv.Line.X2 != b.X) nv.Line.X2 = b.X;
-                if (nv.Line.Y2 != b.Y) nv.Line.Y2 = b.Y;
+                nv.Branch.Update(CenterOf(pv), CenterOf(nv));
             }
         }
     }

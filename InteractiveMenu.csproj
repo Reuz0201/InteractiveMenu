@@ -2,7 +2,9 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- Windows-TFM нужен для WinRT API (что сейчас играет — для живых состояний шариков) -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>disable</ImplicitUsings>
@@ -20,6 +22,11 @@
     <Product>InteractiveMenu</Product>
     <Authors>Reuz0201</Authors>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- яркость встроенного экрана ноутбука (WMI) -->
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="Assets\icon.ico" />

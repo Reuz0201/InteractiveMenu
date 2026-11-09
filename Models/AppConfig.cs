@@ -3,6 +3,13 @@ using System.Windows.Input;
 
 namespace InteractiveMenu.Models
 {
+    public enum BallTheme
+    {
+        Glass,
+        Neon,
+        Flat
+    }
+
     public class AppConfig
     {
         // --- управление
@@ -18,6 +25,15 @@ namespace InteractiveMenu.Models
 
         /// <summary>Множитель размера шариков и веток.</summary>
         public double BallScale { get; set; } = 1.0;
+
+        /// <summary>Как выглядят шарики.</summary>
+        public BallTheme Theme { get; set; } = BallTheme.Glass;
+
+        /// <summary>Ветки плавными дугами вместо прямых линий.</summary>
+        public bool CurvedBranches { get; set; } = true;
+
+        /// <summary>Тихий звук, когда кнопка срабатывает.</summary>
+        public bool ClickSound { get; set; } = true;
 
         // --- обновления
         public bool AutoUpdate { get; set; } = true;

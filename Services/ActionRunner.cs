@@ -14,6 +14,9 @@ namespace InteractiveMenu.Services
         public static Action OpenSettingsRequested;
         public static event Action<string> Error;
 
+        /// <summary>Короткое уведомление о результате (например, на какое устройство переключили звук).</summary>
+        public static event Action<string, string> Notice;
+
         public static async Task RunAsync(IEnumerable<ActionStep> steps)
         {
             foreach (var step in steps.ToList())
@@ -73,6 +76,27 @@ namespace InteractiveMenu.Services
                 case ActionType.VolumeDown:
                     for (int i = 0; i < Math.Max(1, ParseInt(arg, 10) / 2); i++) NativeMethods.Tap(0xAE, true);
                     break;
+                case ActionType.SwitchAudioDevice:
+                {
+                    string name = await Task.Run(() => AudioDevices.Switch(arg));
+                    Notice?.Invoke("🎧 Звук переключён", name);
+                    break;
+                }
+                case ActionType.Brightness:
+                {
+                    int level = await Task.Run(() => Brightness.Apply(arg));
+                    Notice?.Invoke("🔆 Яркость", $"{level}%");
+                    break;
+                }
+                case ActionType.ScreenshotArea:
+                    Process.Start(new ProcessStartInfo("ms-screenclip:") { UseShellExecute = true });
+                    break;
+                case ActionType.ScreenshotFull:
+                {
+                    string file = TakeScreenshot();
+                    Notice?.Invoke("📷 Скриншот сохранён", file);
+                    break;
+                }
                 case ActionType.MediaPlayPause:
                     NativeMethods.Tap(0xB3, true);
                     break;
@@ -101,6 +125,25 @@ namespace InteractiveMenu.Services
                     OpenSettingsRequested?.Invoke();
                     break;
             }
+        }
+
+        /// <summary>Снимок монитора, на котором курсор: PNG в Изображения\\Screenshots + в буфер обмена.</summary>
+        private static string TakeScreenshot()
+        {
+            var screen = System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position);
+            var b = screen.Bounds;
+            using var bmp = new System.Drawing.Bitmap(b.Width, b.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+                g.CopyFromScreen(b.Left, b.Top, 0, 0, b.Size, System.Drawing.CopyPixelOperation.SourceCopy);
+
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Screenshots");
+            Directory.CreateDirectory(dir);
+            string file = Path.Combine(dir, $"InteractiveMenu_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.png");
+            bmp.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+
+            try { System.Windows.Forms.Clipboard.SetImage(bmp); }
+            catch (Exception ex) { Log.Warn("Буфер обмена: " + ex.Message); }
+            return file;
         }
 
         private static string NormalizePath(string p)
