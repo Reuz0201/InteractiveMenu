@@ -39,6 +39,11 @@ namespace InteractiveMenu.Services
             {
                 case ActionType.OpenPath:
                 {
+                    if (IsUri(arg))
+                    {
+                        OpenUri(arg);
+                        break;
+                    }
                     string path = NormalizePath(arg);
                     var psi = new ProcessStartInfo(path) { UseShellExecute = true };
                     if (!string.IsNullOrWhiteSpace(s.ExtraArgs)) psi.Arguments = s.ExtraArgs;
@@ -48,11 +53,16 @@ namespace InteractiveMenu.Services
                 }
                 case ActionType.OpenUrl:
                 {
-                    string url = arg;
+                    string url = arg.Trim().Trim('"');
                     if (!url.Contains("://")) url = "https://" + url;
-                    Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                    OpenUri(url);
                     break;
                 }
+                case ActionType.RunCommand when IsUri(arg):
+                case ActionType.RunCommandWindow when IsUri(arg):
+                    // ссылку вида epic:// / steam:// в cmd открыть нельзя (а «&» в ней cmd режет) — открываем как ссылку
+                    OpenUri(arg);
+                    break;
                 case ActionType.RunCommand:
                     Process.Start(new ProcessStartInfo("cmd.exe", "/c " + arg)
                     {
@@ -144,6 +154,39 @@ namespace InteractiveMenu.Services
             try { System.Windows.Forms.Clipboard.SetImage(bmp); }
             catch (Exception ex) { Log.Warn("Буфер обмена: " + ex.Message); }
             return file;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex UriPattern =
+            new System.Text.RegularExpressions.Regex(@"^[a-zA-Z][a-zA-Z0-9+.\-]*://", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        /// <summary>«что-то://…» — ссылка или протокол программы (steam://, com.epicgames.launcher://, discord://…).</summary>
+        public static bool IsUri(string text) => UriPattern.IsMatch((text ?? "").Trim().Trim('"'));
+
+        /// <summary>
+        /// Открыть ссылку/протокол через оболочку Windows. Если не вышло напрямую — через проводник
+        /// (он открывает протоколы так же, как двойной клик по ярлыку).
+        /// </summary>
+        private static void OpenUri(string uri)
+        {
+            uri = uri.Trim().Trim('"');
+            try
+            {
+                Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+            }
+            catch (Exception first)
+            {
+                Log.Warn($"Не открылось напрямую ({first.Message}), пробую через explorer: {uri}");
+                try
+                {
+                    Process.Start(new ProcessStartInfo("explorer.exe", "\"" + uri + "\"") { UseShellExecute = false });
+                }
+                catch
+                {
+                    string scheme = uri.Substring(0, uri.IndexOf("://", StringComparison.Ordinal));
+                    throw new InvalidOperationException(
+                        $"Windows не знает, чем открыть «{scheme}://». Проверь, что нужная программа установлена.");
+                }
+            }
         }
 
         public static string NormalizePath(string p)
