@@ -109,6 +109,22 @@ namespace InteractiveMenu
             }
 
             if (ConfigService.LastLoadWasNew) ShowSettings();
+            PreloadIcons();
+        }
+
+        /// <summary>Заранее достаём иконки программ, чтобы первое открытие меню не подтормаживало.</summary>
+        private void PreloadIcons()
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                void Walk(MenuNode n)
+                {
+                    _ = n.IconSource;
+                    foreach (var c in n.Children) Walk(c);
+                }
+                try { Walk(Config.Root); }
+                catch (Exception ex) { Log.Warn("Предзагрузка иконок: " + ex.Message); }
+            }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         }
 
         private static string ArgValue(string[] args, string name)
@@ -166,6 +182,7 @@ namespace InteractiveMenu
             {
                 Config = cfg;
                 ApplyHotkey();
+                PreloadIcons();
             };
             _settings.Closed += (s, a) => _settings = null;
             _settings.Show();

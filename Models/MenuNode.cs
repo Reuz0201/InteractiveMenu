@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Linq;
 using System.Text.Json.Serialization;
 using System.Windows.Media;
 using InteractiveMenu.Services;
@@ -24,6 +25,8 @@ namespace InteractiveMenu.Models
         private bool _isSelected;
         private bool _isExpanded;
         private string _apps = "";
+        private string _iconImage = "";
+        private bool _useAppIcon = true;
         private int _dropHint;
         private ObservableCollection<MenuNode> _children;
         private ObservableCollection<ActionStep> _steps;
@@ -44,6 +47,70 @@ namespace InteractiveMenu.Models
         {
             get => _icon;
             set => Set(ref _icon, value);
+        }
+
+        /// <summary>Своя картинка для шарика: png/jpg/ico или exe/ярлык (иконка возьмётся из него).</summary>
+        public string IconImage
+        {
+            get => _iconImage;
+            set
+            {
+                if (Set(ref _iconImage, value ?? "")) RaiseIcon();
+            }
+        }
+
+        /// <summary>Брать иконку из программы/ярлыка, который открывает кнопка.</summary>
+        public bool UseAppIcon
+        {
+            get => _useAppIcon;
+            set
+            {
+                if (Set(ref _useAppIcon, value)) RaiseIcon();
+            }
+        }
+
+        /// <summary>Откуда брать картинку: своя → иконка программы из первого действия → нет (эмодзи).</summary>
+        [JsonIgnore]
+        public string IconSourcePath
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(IconImage)) return ActionRunner.NormalizePath(IconImage);
+                if (!UseAppIcon || IsCategory) return null;
+
+                // steam://rungameid/570 — иконка игры из кеша Steam
+                foreach (var st in Steps)
+                {
+                    var m = SteamUrl.Match(st.Argument ?? "");
+                    if (m.Success) return IconCache.FindSteamIcon(m.Groups[1].Value);
+                }
+
+                var step = Steps.FirstOrDefault(s => s.Type == ActionType.OpenPath);
+                if (step == null || string.IsNullOrWhiteSpace(step.Argument)) return null;
+                string path = ActionRunner.NormalizePath(step.Argument);
+                return System.IO.File.Exists(path) ? path : null; // для папок — эмодзи, он выразительнее
+            }
+        }
+
+        /// <summary>Готовая картинка или null (тогда показывается эмодзи).</summary>
+        [JsonIgnore]
+        public ImageSource IconSource => IconCache.Get(IconSourcePath);
+
+        [JsonIgnore]
+        public bool HasIconImage => IconSource != null;
+
+        [JsonIgnore]
+        public bool CanUseAppIcon => !IsCategory &&
+            Steps.Any(s => s.Type == ActionType.OpenPath || SteamUrl.IsMatch(s.Argument ?? ""));
+
+        private static readonly System.Text.RegularExpressions.Regex SteamUrl =
+            new System.Text.RegularExpressions.Regex(@"steam://(?:rungameid|run|launch)/(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        public void RaiseIcon()
+        {
+            Raise(nameof(IconSource));
+            Raise(nameof(HasIconImage));
+            Raise(nameof(CanUseAppIcon));
         }
 
         public string Color
@@ -68,6 +135,7 @@ namespace InteractiveMenu.Models
                 {
                     Raise(nameof(IsCategory));
                     Raise(nameof(Summary));
+                    RaiseIcon();
                 }
             }
         }
@@ -120,15 +188,35 @@ namespace InteractiveMenu.Models
             get => _steps;
             set
             {
-                if (_steps != null) _steps.CollectionChanged -= OnContentChanged;
+                if (_steps != null)
+                {
+                    _steps.CollectionChanged -= OnContentChanged;
+                    _steps.CollectionChanged -= OnStepsChanged;
+                    foreach (var st in _steps) st.PropertyChanged -= OnStepChanged;
+                }
                 _steps = value ?? new ObservableCollection<ActionStep>();
                 _steps.CollectionChanged += OnContentChanged;
+                _steps.CollectionChanged += OnStepsChanged;
+                foreach (var st in _steps) st.PropertyChanged += OnStepChanged;
+                RaiseIcon();
                 Raise(nameof(Steps));
                 Raise(nameof(Summary));
             }
         }
 
         private void OnContentChanged(object sender, NotifyCollectionChangedEventArgs e) => Raise(nameof(Summary));
+
+        private void OnStepsChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (e.OldItems != null) foreach (ActionStep st in e.OldItems) st.PropertyChanged -= OnStepChanged;
+            if (e.NewItems != null) foreach (ActionStep st in e.NewItems) st.PropertyChanged += OnStepChanged;
+            RaiseIcon();
+        }
+
+        private void OnStepChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is nameof(ActionStep.Argument) or nameof(ActionStep.Type)) RaiseIcon();
+        }
 
         [JsonIgnore]
         public bool IsCategory => Kind == NodeKind.Category;

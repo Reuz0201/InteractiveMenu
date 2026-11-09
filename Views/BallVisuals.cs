@@ -161,6 +161,7 @@ namespace InteractiveMenu.Views
         public Grid Ball;
         public Ellipse Glow;
         public TextBlock Icon;
+        public Image Picture;
         public double GlowBase;
     }
 
@@ -268,7 +269,41 @@ namespace InteractiveMenu.Views
             };
             ball.Children.Add(icon);
 
-            return new BallParts { Ball = ball, Glow = glow, Icon = icon, GlowBase = glowBase };
+            // иконка программы / своя картинка — вместо эмодзи
+            var picture = new Image
+            {
+                Width = size * 0.54,
+                Height = size * 0.54,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false
+            };
+            RenderOptions.SetBitmapScalingMode(picture, BitmapScalingMode.HighQuality);
+            ball.Children.Add(picture);
+
+            var parts = new BallParts { Ball = ball, Glow = glow, Icon = icon, Picture = picture, GlowBase = glowBase };
+            SetIcon(parts, node);
+            return parts;
+        }
+
+        /// <summary>Показать на шарике картинку узла (если есть) или его эмодзи.</summary>
+        public static void SetIcon(BallParts parts, MenuNode node)
+        {
+            var img = node.IconSource;
+            if (img != null)
+            {
+                parts.Picture.Source = img;
+                parts.Picture.Visibility = Visibility.Visible;
+                parts.Icon.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                parts.Picture.Source = null;
+                parts.Picture.Visibility = Visibility.Collapsed;
+                parts.Icon.Text = node.Icon;
+                parts.Icon.Visibility = Visibility.Visible;
+            }
         }
 
         public static double BranchThickness(int depth, double k, BallTheme theme) =>

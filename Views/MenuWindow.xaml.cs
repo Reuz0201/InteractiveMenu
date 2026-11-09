@@ -606,7 +606,7 @@ namespace InteractiveMenu.Views
             {
                 var shown = _hovered != null && _hovered != _root ? _hovered : _root;
                 if (rootVisual.TitleText.Text != shown.Title) rootVisual.TitleText.Text = shown.Title;
-                if (rootVisual.Parts.Icon.Text != shown.Icon) rootVisual.Parts.Icon.Text = shown.Icon;
+                BallFactory.SetIcon(rootVisual.Parts, shown);
             }
         }
 

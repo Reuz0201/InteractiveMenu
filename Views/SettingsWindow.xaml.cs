@@ -137,6 +137,9 @@ namespace InteractiveMenu.Views
                 case nameof(MenuNode.IsCategory):
                 case nameof(MenuNode.DropHint):
                 case nameof(MenuNode.HasApps):
+                case nameof(MenuNode.IconSource):
+                case nameof(MenuNode.HasIconImage):
+                case nameof(MenuNode.CanUseAppIcon):
                     return;
             }
             MarkDirty();
@@ -578,6 +581,29 @@ namespace InteractiveMenu.Views
             Select(_cfg.Root);
             NavMenu.IsChecked = true;
             SetDirty(true);
+        }
+
+        // ================== картинка шарика ==================
+
+        private void PickIconImage_Click(object sender, RoutedEventArgs e)
+        {
+            if (_current == null) return;
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Картинка для шарика",
+                Filter = "Картинки и программы|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.ico;*.exe;*.lnk;*.url|Все файлы|*.*"
+            };
+            if (dlg.ShowDialog(this) != true) return;
+            IconCache.Forget(dlg.FileName);
+            _current.IconImage = dlg.FileName;
+            Preview.RequestRender();
+        }
+
+        private void ClearIconImage_Click(object sender, RoutedEventArgs e)
+        {
+            if (_current == null) return;
+            _current.IconImage = "";
+            Preview.RequestRender();
         }
 
         // ================== выбор из списков ==================

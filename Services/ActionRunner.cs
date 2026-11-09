@@ -146,9 +146,9 @@ namespace InteractiveMenu.Services
             return file;
         }
 
-        private static string NormalizePath(string p)
+        public static string NormalizePath(string p)
         {
-            p = Environment.ExpandEnvironmentVariables(p.Trim().Trim('"'));
+            p = Environment.ExpandEnvironmentVariables((p ?? "").Trim().Trim('"'));
             // Z:/Programms -> Z:\Programms (shell не любит прямые слэши в локальных путях)
             if (p.Length >= 2 && p[1] == ':') p = p.Replace('/', '\\');
             return p;
