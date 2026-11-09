@@ -3,8 +3,10 @@ name: Build
 # Проверочная сборка для веток (кроме main): без релиза, просто «компилируется ли»
 on:
   push:
-    branches-ignore: [ main ]
+    branches: [ dev, 'feature/**' ]
   pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,4 +16,5 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - run: dotnet build InteractiveMenu.csproj -c Release --nologo
+      - name: Сборка
+        run: dotnet build InteractiveMenu.csproj -c Release --nologo
