@@ -1,0 +1,70 @@
+name: Release
+
+# Каждый пуш в main (кроме правок только документации) собирает новую версию
+# и публикует её в GitHub Releases. Установленное приложение само её подхватит.
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - 'install.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # нужна история, чтобы посчитать номер сборки
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Версия
+        id: ver
+        shell: pwsh
+        run: |
+          # мажор.минор — из version.txt, последняя цифра — сколько коммитов прошло
+          # с последней правки version.txt (поменял version.txt — счёт пошёл с .0)
+          $prefix = (Get-Content version.txt | Select-Object -First 1).Trim()
+          $base = git log -1 --format=%H -- version.txt
+          $patch = [int](git rev-list --count "$base..HEAD")
+          $v = "$prefix.$patch"
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Собираю версию $v"
+
+      - name: Сборка
+        run: dotnet publish InteractiveMenu.csproj -c Release -o publish --nologo -p:Version=${{ steps.ver.outputs.version }}
+
+      - name: Архив и контрольная сумма
+        shell: pwsh
+        run: |
+          Remove-Item publish\*.pdb -ErrorAction SilentlyContinue
+          if (-not (Test-Path "publish\InteractiveMenu.exe")) { throw "нет InteractiveMenu.exe в сборке" }
+          Compress-Archive -Path publish\* -DestinationPath InteractiveMenu-win-x64.zip
+          $hash = (Get-FileHash InteractiveMenu-win-x64.zip -Algorithm SHA256).Hash
+          "$hash  InteractiveMenu-win-x64.zip" | Out-File -Encoding ascii -NoNewline InteractiveMenu-win-x64.zip.sha256
+          Get-Item InteractiveMenu-win-x64.zip* | Select-Object Name, Length
+          Write-Host "SHA256: $hash"
+
+      - name: Релиз
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: InteractiveMenu ${{ steps.ver.outputs.version }}
+          make_latest: true
+          files: |
+            InteractiveMenu-win-x64.zip
+            InteractiveMenu-win-x64.zip.sha256
+          body_path: release-notes.md

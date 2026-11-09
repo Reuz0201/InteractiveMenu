@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>InteractiveMenu</AssemblyName>
+    <RootNamespace>InteractiveMenu</RootNamespace>
+    <!-- запустится и на .NET 9/10, если 8-го рантайма нет -->
+    <RollForward>Major</RollForward>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+
+    <!-- Локальная сборка = dev (без автообновлений). GitHub Actions подставляет настоящую версию. -->
+    <Version>0.0.0-dev</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Product>InteractiveMenu</Product>
+    <Authors>Reuz0201</Authors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\icon.ico" />
+    <Resource Include="Assets\icon.png" />
+  </ItemGroup>
+
+</Project>
