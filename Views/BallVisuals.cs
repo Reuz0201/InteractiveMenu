@@ -46,16 +46,91 @@ namespace InteractiveMenu.Views
                 int m = kids.Count;
                 if (m == 0) continue;
 
-                double spread = m == 1 ? 0 : Math.Min(130, (m - 1) * 34);
-                double dist = (150 + Math.Max(0, m - 4) * 14) * k;
+                // шаг между детьми и расстояние подбираем так, чтобы соседние шарики
+                // вместе с подписями не налезали друг на друга
+                int depth = d + 2;
+                double step = m == 1 ? 0 : Math.Min(40, 140.0 / (m - 1));
+                double spread = step * (m - 1);
+                double need = BallSize(depth, k) + 62 * k;
+                double dist = m == 1
+                    ? 160 * k
+                    : Math.Max(160 * k, need / (2 * Math.Sin(step * Math.PI / 360)));
+                dist = Math.Min(dist, 320 * k);
+
                 for (int j = 0; j < m; j++)
                 {
-                    double a = parentPl.Angle + (m == 1 ? 0 : -spread / 2 + spread * j / (m - 1));
-                    list.Add(new Placement(kids[j], cat, d + 2, clamp(parentPl.Pos + Polar(dist, a)), a));
+                    double a = parentPl.Angle - spread / 2 + step * j;
+                    list.Add(new Placement(kids[j], cat, depth, clamp(parentPl.Pos + Polar(dist, a)), a));
                 }
             }
 
-            return list;
+            return Relax(list, k, clamp);
+        }
+
+        /// <summary>
+        /// Если шарик (вместе с подписью) всё равно наезжает на соседа — например, у края экрана
+        /// или рядом с подписью родителя — отодвигаем его наружу вдоль своей ветки вместе с его детьми.
+        /// </summary>
+        private static List<Placement> Relax(List<Placement> list, double k, Func<Point, Point> clamp)
+        {
+            int count = list.Count;
+            var pos = list.Select(p => p.Pos).ToArray();
+            var index = new Dictionary<MenuNode, int>();
+            for (int i = 0; i < count; i++) index[list[i].Node] = i;
+
+            bool IsUnder(int child, int ancestor)
+            {
+                var parent = list[child].Parent;
+                while (parent != null && index.TryGetValue(parent, out int pi))
+                {
+                    if (pi == ancestor) return true;
+                    parent = list[pi].Parent;
+                }
+                return false;
+            }
+
+            Rect Footprint(int i)
+            {
+                var pl = list[i];
+                double s = BallSize(pl.Depth, k);
+                double label = Math.Min(s + 100 * k, (pl.Node.Title?.Length ?? 0) * 7.4 * k + 16);
+                double w = Math.Max(s, label) + 14 * k;
+                return new Rect(pos[i].X - w / 2, pos[i].Y - s / 2 - 6 * k, w, s + 42 * k);
+            }
+
+            for (int iter = 0; iter < 24; iter++)
+            {
+                bool moved = false;
+                for (int b = 0; b < count; b++)
+                {
+                    if (list[b].Depth < 2) continue;
+                    for (int a = 0; a < count; a++)
+                    {
+                        if (a == b) continue;
+                        double ov = Overlap(Footprint(a), Footprint(b));
+                        if (ov <= 0) continue;
+
+                        var target = clamp(pos[b] + Polar(ov * 0.6 + 1, list[b].Angle));
+                        var delta = target - pos[b];
+                        pos[b] = target;
+                        for (int c = 0; c < count; c++)
+                            if (IsUnder(c, b)) pos[c] = clamp(pos[c] + delta);
+                        moved = true;
+                    }
+                }
+                if (!moved) break;
+            }
+
+            var result = new List<Placement>(count);
+            for (int i = 0; i < count; i++) result.Add(list[i] with { Pos = pos[i] });
+            return result;
+        }
+
+        private static double Overlap(Rect a, Rect b)
+        {
+            double dx = Math.Min(a.Right, b.Right) - Math.Max(a.Left, b.Left);
+            double dy = Math.Min(a.Bottom, b.Bottom) - Math.Max(a.Top, b.Top);
+            return dx > 0 && dy > 0 ? Math.Min(dx, dy) : 0;
         }
 
         /// <summary>Режим поиска: найденные шарики кольцом вокруг центра.</summary>
