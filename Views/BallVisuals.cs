@@ -196,19 +196,6 @@ namespace InteractiveMenu.Views
             return new BallParts { Ball = ball, Glow = glow, Icon = icon, GlowBase = glowBase };
         }
 
-        public static Brush BranchBrush(Color color, BallTheme theme)
-        {
-            var c = theme switch
-            {
-                BallTheme.Neon => ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.35), 235),
-                BallTheme.Flat => Color.FromArgb(80, 255, 255, 255),
-                _ => ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.25), 175)
-            };
-            var b = new SolidColorBrush(c);
-            b.Freeze();
-            return b;
-        }
-
         public static double BranchThickness(int depth, double k, BallTheme theme) =>
             (depth == 1 ? 3 : 2) * k * (theme == BallTheme.Neon ? 1.3 : 1.0);
 
@@ -223,57 +210,126 @@ namespace InteractiveMenu.Views
         }
     }
 
-    /// <summary>Ветка между шариками: прямая или плавная дуга. Обновляется каждый кадр.</summary>
+    /// <summary>
+    /// Ветка между шариками. Рисуется залитым контуром, который сужается от родителя к ребёнку.
+    /// Плавный режим — кубическая кривая: ветка выходит из родителя по направлению его собственной
+    /// ветки и мягко поворачивает к ребёнку, как развилка у дерева. Прямой режим — сужающийся отрезок.
+    /// Обновляется каждый кадр, пока шарики летят.
+    /// </summary>
     public sealed class Branch
     {
-        private readonly PathFigure _figure;
-        private readonly QuadraticBezierSegment _segment;
+        private const int Samples = 20;
+
         private readonly bool _curved;
+        private readonly double _w0, _w1;
+        private readonly LinearGradientBrush _brush;
+        private readonly Point[] _left = new Point[Samples + 1];
+        private readonly Point[] _right = new Point[Samples + 1];
         private Point _lastA, _lastB;
+        private double _lastSa = double.NaN, _lastEa = double.NaN;
 
         public Path Shape { get; }
 
-        public Branch(Brush stroke, double thickness, bool curved)
+        public Branch(Color color, BallTheme theme, double thickness, bool curved)
         {
             _curved = curved;
-            _segment = new QuadraticBezierSegment();
-            _figure = new PathFigure { IsClosed = false, IsFilled = false };
-            _figure.Segments.Add(_segment);
-            var geometry = new PathGeometry();
-            geometry.Figures.Add(_figure);
-            Shape = new Path
+            _w0 = thickness * 2.6;   // у родителя
+            _w1 = thickness * 1.0;   // у ребёнка
+
+            Color c0, c1;
+            switch (theme)
             {
-                Data = geometry,
-                Stroke = stroke,
-                StrokeThickness = thickness,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round,
-                IsHitTestVisible = false
-            };
+                case BallTheme.Neon:
+                    c0 = ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.35), 245);
+                    c1 = ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.2), 200);
+                    break;
+                case BallTheme.Flat:
+                    c0 = Color.FromArgb(95, 255, 255, 255);
+                    c1 = Color.FromArgb(55, 255, 255, 255);
+                    break;
+                default:
+                    c0 = ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.3), 215);
+                    c1 = ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.1), 150);
+                    break;
+            }
+
+            _brush = new LinearGradientBrush { MappingMode = BrushMappingMode.Absolute };
+            _brush.GradientStops.Add(new GradientStop(c0, 0));
+            _brush.GradientStops.Add(new GradientStop(c1, 1));
+
+            Shape = new Path { Fill = _brush, IsHitTestVisible = false };
         }
 
-        public void Update(Point a, Point b)
+        /// <param name="startAngle">куда «смотрит» ветка у родителя (градусы)</param>
+        /// <param name="endAngle">куда «смотрит» ветка у ребёнка (градусы)</param>
+        public void Update(Point a, Point b, double startAngle, double endAngle)
         {
-            if (a == _lastA && b == _lastB) return;
+            if (a == _lastA && b == _lastB && startAngle == _lastSa && endAngle == _lastEa) return;
             _lastA = a;
             _lastB = b;
+            _lastSa = startAngle;
+            _lastEa = endAngle;
 
-            Point control;
+            var ab = b - a;
+            double len = ab.Length;
+            if (len < 1)
+            {
+                Shape.Data = null;
+                return;
+            }
+
+            Point p1, p2;
             if (_curved)
             {
-                // изгиб вбок на 18% длины — ветка выглядит «живой», а не как линейка
-                var d = b - a;
-                var normal = new Vector(-d.Y, d.X) * 0.18;
-                control = a + d * 0.5 + normal;
+                p1 = a + MenuLayout.Polar(len * 0.45, startAngle);
+                p2 = b - MenuLayout.Polar(len * 0.35, endAngle);
             }
             else
             {
-                control = a + (b - a) * 0.5;
+                p1 = a + ab / 3;
+                p2 = a + ab * 2 / 3;
             }
 
-            _figure.StartPoint = a;
-            _segment.Point1 = control;
-            _segment.Point2 = b;
+            for (int i = 0; i <= Samples; i++)
+            {
+                double t = (double)i / Samples;
+                var p = Bezier(a, p1, p2, b, t);
+                var tangent = BezierTangent(a, p1, p2, b, t);
+                if (tangent.Length < 1e-6) tangent = ab;
+                tangent.Normalize();
+                var normal = new Vector(-tangent.Y, tangent.X);
+                double half = (_w0 + (_w1 - _w0) * t) / 2;
+                _left[i] = p + normal * half;
+                _right[i] = p - normal * half;
+            }
+
+            var geometry = new StreamGeometry();
+            using (var ctx = geometry.Open())
+            {
+                ctx.BeginFigure(_left[0], true, true);
+                for (int i = 1; i <= Samples; i++) ctx.LineTo(_left[i], false, false);
+                for (int i = Samples; i >= 0; i--) ctx.LineTo(_right[i], false, false);
+            }
+            geometry.Freeze();
+            Shape.Data = geometry;
+
+            _brush.StartPoint = a;
+            _brush.EndPoint = b;
+        }
+
+        private static Point Bezier(Point p0, Point p1, Point p2, Point p3, double t)
+        {
+            double u = 1 - t;
+            double b0 = u * u * u, b1 = 3 * u * u * t, b2 = 3 * u * t * t, b3 = t * t * t;
+            return new Point(
+                b0 * p0.X + b1 * p1.X + b2 * p2.X + b3 * p3.X,
+                b0 * p0.Y + b1 * p1.Y + b2 * p2.Y + b3 * p3.Y);
+        }
+
+        private static Vector BezierTangent(Point p0, Point p1, Point p2, Point p3, double t)
+        {
+            double u = 1 - t;
+            return 3 * u * u * (p1 - p0) + 6 * u * t * (p2 - p1) + 3 * t * t * (p3 - p2);
         }
     }
 }

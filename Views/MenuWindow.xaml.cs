@@ -36,6 +36,7 @@ namespace InteractiveMenu.Views
             public double Size;
             public double Width;
             public Point Target;
+            public double Angle;
             public FrameworkElement Element;
             public ScaleTransform Scale;
             public TranslateTransform Translate;
@@ -398,6 +399,7 @@ namespace InteractiveMenu.Views
                     born++;
                 }
                 nv.Target = p.Pos;
+                nv.Angle = p.Angle;
                 MoveTo(nv, p.Pos, MoveDuration, nv.PendingDelay);
             }
 
@@ -492,7 +494,7 @@ namespace InteractiveMenu.Views
             Branch branch = null;
             if (p.Parent != null)
             {
-                branch = new Branch(BallFactory.BranchBrush(color, Theme), BallFactory.BranchThickness(p.Depth, k, Theme), _cfg.CurvedBranches);
+                branch = new Branch(color, Theme, BallFactory.BranchThickness(p.Depth, k, Theme), _cfg.CurvedBranches);
                 LineLayer.Children.Add(branch.Shape);
             }
 
@@ -506,6 +508,7 @@ namespace InteractiveMenu.Views
                 Size = size,
                 Width = width,
                 Target = p.Pos,
+                Angle = p.Angle,
                 Element = container,
                 Scale = scale,
                 Translate = translate,
@@ -879,7 +882,9 @@ namespace InteractiveMenu.Views
             {
                 if (nv.Branch == null || nv.Parent == null) continue;
                 if (!_visuals.TryGetValue(nv.Parent, out var pv)) continue;
-                nv.Branch.Update(CenterOf(pv), CenterOf(nv));
+                // у центра ветка идёт по радиусу, дальше — продолжает направление ветки родителя
+                double startAngle = pv.Depth == 0 ? nv.Angle : pv.Angle;
+                nv.Branch.Update(CenterOf(pv), CenterOf(nv), startAngle, nv.Angle);
             }
         }
     }

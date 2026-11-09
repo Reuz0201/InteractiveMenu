@@ -86,15 +86,17 @@ namespace InteractiveMenu.Views
             _canvas.Height = Math.Max(1, maxY - minY);
 
             var pos = placements.ToDictionary(p => p.Node, p => p.Pos + offset);
+            var angles = placements.ToDictionary(p => p.Node, p => p.Angle);
             bool dimSiblings = path.Count > 0;
 
             // ветки
             foreach (var p in placements)
             {
                 if (p.Parent == null) continue;
-                var branch = new Branch(BallFactory.BranchBrush(ColorUtil.Parse(p.Node.Color), theme),
+                var branch = new Branch(ColorUtil.Parse(p.Node.Color), theme,
                     BallFactory.BranchThickness(p.Depth, k, theme), _cfg.CurvedBranches);
-                branch.Update(pos[p.Parent], pos[p.Node]);
+                double startAngle = p.Depth == 1 ? p.Angle : angles[p.Parent];
+                branch.Update(pos[p.Parent], pos[p.Node], startAngle, p.Angle);
                 branch.Shape.Opacity = IsDimmed(p, path) ? 0.35 : 0.9;
                 _canvas.Children.Add(branch.Shape);
             }
