@@ -340,7 +340,9 @@ namespace InteractiveMenu.Views
 
         public Path Shape { get; }
 
-        public Branch(Color color, BallTheme theme, double thickness, bool curved)
+        /// <param name="fromColor">цвет родителя — ветка начинается его цветом</param>
+        /// <param name="toColor">цвет ребёнка — и плавно переходит в него</param>
+        public Branch(Color fromColor, Color toColor, BallTheme theme, double thickness, bool curved)
         {
             _curved = curved;
             _w0 = thickness * 2.6;   // у родителя
@@ -350,16 +352,16 @@ namespace InteractiveMenu.Views
             switch (theme)
             {
                 case BallTheme.Neon:
-                    c0 = ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.35), 245);
-                    c1 = ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.2), 200);
+                    c0 = ColorUtil.WithAlpha(ColorUtil.Lighten(fromColor, 0.35), 245);
+                    c1 = ColorUtil.WithAlpha(ColorUtil.Lighten(toColor, 0.25), 225);
                     break;
                 case BallTheme.Flat:
                     c0 = Color.FromArgb(95, 255, 255, 255);
                     c1 = Color.FromArgb(55, 255, 255, 255);
                     break;
                 default:
-                    c0 = ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.3), 215);
-                    c1 = ColorUtil.WithAlpha(ColorUtil.Lighten(color, 0.1), 150);
+                    c0 = ColorUtil.WithAlpha(ColorUtil.Lighten(fromColor, 0.3), 215);
+                    c1 = ColorUtil.WithAlpha(ColorUtil.Lighten(toColor, 0.15), 170);
                     break;
             }
 

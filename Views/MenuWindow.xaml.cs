@@ -494,7 +494,7 @@ namespace InteractiveMenu.Views
             Branch branch = null;
             if (p.Parent != null)
             {
-                branch = new Branch(color, Theme, BallFactory.BranchThickness(p.Depth, k, Theme), _cfg.CurvedBranches);
+                branch = new Branch(ColorUtil.Parse(p.Parent.Color), color, Theme, BallFactory.BranchThickness(p.Depth, k, Theme), _cfg.CurvedBranches);
                 LineLayer.Children.Add(branch.Shape);
             }
 

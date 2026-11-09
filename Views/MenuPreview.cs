@@ -93,7 +93,7 @@ namespace InteractiveMenu.Views
             foreach (var p in placements)
             {
                 if (p.Parent == null) continue;
-                var branch = new Branch(ColorUtil.Parse(p.Node.Color), theme,
+                var branch = new Branch(ColorUtil.Parse(p.Parent.Color), ColorUtil.Parse(p.Node.Color), theme,
                     BallFactory.BranchThickness(p.Depth, k, theme), _cfg.CurvedBranches);
                 double startAngle = p.Depth == 1 ? p.Angle : angles[p.Parent];
                 branch.Update(pos[p.Parent], pos[p.Node], startAngle, p.Angle);
